@@ -18,7 +18,12 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { error: "Unexpected server error while fetching route data." },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unexpected server error while fetching route data.",
+      },
       { status: 500 }
     );
   }

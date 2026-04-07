@@ -1,44 +1,53 @@
-import { getServerEnv } from "@/lib/server/env";
+import { withCache } from "@/lib/server/cache";
+import { getOpenWeatherApiKey } from "@/lib/server/env";
 import { ApiError, parseJson } from "@/lib/server/http";
 
-type WeatherApiResponse = {
-  weatherCondition?: {
-    type?: string;
-    description?: {
-      text?: string;
-    };
+type OpenWeatherApiResponse = {
+  weather?: Array<{
+    main?: string;
+    description?: string;
+  }>;
+  main?: {
+    temp?: number;
   };
-  temperature?: {
-    degrees?: number;
+  rain?: {
+    "1h"?: number;
+    "3h"?: number;
   };
-  precipitation?: {
-    probability?: {
-      percent?: number;
-      type?: string;
-    };
+  snow?: {
+    "1h"?: number;
+    "3h"?: number;
   };
-  thunderstormProbability?: number;
+  alerts?: Array<unknown>;
+  cod?: number | string;
+  message?: string;
 };
 
-type WeatherResult = {
-  condition: string;
+export type WeatherResult = {
+  condition: "rain" | "clear" | "storm";
   temperature: number;
   riskLevel: "low" | "medium" | "high";
 };
 
-function normalizeCondition(value?: string) {
-  const raw = (value || "CLEAR").toUpperCase();
+const WEATHER_CACHE_MS = 15_000;
 
-  if (raw.includes("THUNDER") || raw.includes("STORM")) {
+function normalizeCondition(value?: string, description?: string): WeatherResult["condition"] {
+  const combined = `${value ?? ""} ${description ?? ""}`.trim().toLowerCase();
+
+  if (
+    combined.includes("thunder") ||
+    combined.includes("storm") ||
+    combined.includes("tornado") ||
+    combined.includes("squall")
+  ) {
     return "storm";
   }
 
   if (
-    raw.includes("RAIN") ||
-    raw.includes("DRIZZLE") ||
-    raw.includes("SHOWERS") ||
-    raw.includes("SNOW") ||
-    raw.includes("SLEET")
+    combined.includes("rain") ||
+    combined.includes("drizzle") ||
+    combined.includes("snow") ||
+    combined.includes("mist")
   ) {
     return "rain";
   }
@@ -47,21 +56,18 @@ function normalizeCondition(value?: string) {
 }
 
 function getRiskLevel(params: {
-  normalizedCondition: string;
-  precipitationChance: number;
-  thunderstormProbability: number;
-}): "low" | "medium" | "high" {
-  const { normalizedCondition, precipitationChance, thunderstormProbability } = params;
+  condition: WeatherResult["condition"];
+  rainVolume: number;
+  snowVolume: number;
+  hasAlerts: boolean;
+}): WeatherResult["riskLevel"] {
+  const { condition, rainVolume, snowVolume, hasAlerts } = params;
 
-  if (
-    normalizedCondition === "storm" ||
-    thunderstormProbability >= 40 ||
-    precipitationChance >= 70
-  ) {
+  if (condition === "storm" || hasAlerts || rainVolume >= 2 || snowVolume >= 1) {
     return "high";
   }
 
-  if (normalizedCondition === "rain" || precipitationChance >= 30) {
+  if (condition === "rain" || rainVolume > 0 || snowVolume > 0) {
     return "medium";
   }
 
@@ -72,47 +78,56 @@ export async function getWeatherData(params: {
   latitude: number;
   longitude: number;
 }): Promise<WeatherResult> {
-  const { weatherApiKey } = getServerEnv();
-  const query = new URLSearchParams({
-    key: weatherApiKey,
-    "location.latitude": String(params.latitude),
-    "location.longitude": String(params.longitude),
-    unitsSystem: "METRIC",
-  });
+  const { latitude, longitude } = params;
+  const cacheKey = `openweather:${latitude.toFixed(3)}:${longitude.toFixed(3)}`;
 
-  const response = await fetch(
-    `https://weather.googleapis.com/v1/currentConditions:lookup?${query.toString()}`,
-    {
-      method: "GET",
-      cache: "no-store",
+  return withCache(cacheKey, WEATHER_CACHE_MS, async () => {
+    const openWeatherApiKey = getOpenWeatherApiKey();
+    const query = new URLSearchParams({
+      lat: String(latitude),
+      lon: String(longitude),
+      appid: openWeatherApiKey,
+      units: "metric",
+    });
+
+    const response = await fetch(
+      `https://api.openweathermap.org/data/2.5/weather?${query.toString()}`,
+      {
+        method: "GET",
+        cache: "no-store",
+      }
+    );
+
+    const data = await parseJson<OpenWeatherApiResponse>(response);
+
+    if (!response.ok || (typeof data.cod === "number" && data.cod >= 400)) {
+      throw new ApiError(
+        data.message || "Failed to fetch weather from OpenWeather.",
+        response.status || 502
+      );
     }
-  );
 
-  const data = await parseJson<WeatherApiResponse>(response);
+    const primaryWeather = data.weather?.[0];
+    const condition = normalizeCondition(primaryWeather?.main, primaryWeather?.description);
+    const temperature = data.main?.temp;
 
-  if (!response.ok) {
-    throw new ApiError("Failed to fetch weather from Google Weather API.", response.status);
-  }
+    if (typeof temperature !== "number") {
+      throw new ApiError("OpenWeather response was missing temperature data.", 502);
+    }
 
-  const normalizedCondition = normalizeCondition(
-    data.weatherCondition?.type || data.weatherCondition?.description?.text
-  );
-  const temperature = data.temperature?.degrees;
+    const rainVolume = data.rain?.["1h"] ?? data.rain?.["3h"] ?? 0;
+    const snowVolume = data.snow?.["1h"] ?? data.snow?.["3h"] ?? 0;
+    const hasAlerts = Boolean(data.alerts?.length);
 
-  if (typeof temperature !== "number") {
-    throw new ApiError("Weather API response was missing temperature data.", 502);
-  }
-
-  const precipitationChance = data.precipitation?.probability?.percent ?? 0;
-  const thunderstormProbability = data.thunderstormProbability ?? 0;
-
-  return {
-    condition: normalizedCondition,
-    temperature,
-    riskLevel: getRiskLevel({
-      normalizedCondition,
-      precipitationChance,
-      thunderstormProbability,
-    }),
-  };
+    return {
+      condition,
+      temperature,
+      riskLevel: getRiskLevel({
+        condition,
+        rainVolume,
+        snowVolume,
+        hasAlerts,
+      }),
+    };
+  });
 }

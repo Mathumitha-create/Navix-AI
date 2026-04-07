@@ -1,234 +1,379 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
-import { useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RouteMap } from "@/components/maps/route-map";
+import { AiAssistantPanel } from "@/components/ui/ai-assistant-panel";
+import { useToast } from "@/components/ui/toast-provider";
+import type { SavedPlace } from "@/lib/map-config";
 
-type HomepageMode = "problem" | "solution";
-
-const modeContent: Record<
-  HomepageMode,
-  {
-    label: string;
-    badge: string;
-    title: string;
-    description: string;
-    banner: string;
-    bannerClassName: string;
-  }
-> = {
-  problem: {
-    label: "Without AI",
-    badge: "Reactive mode",
-    title: "The route absorbs the disruption too late.",
-    description:
-      "The truck heads straight into the red corridor, gets hit by the delay event, and loses momentum because nothing predicted the risk early enough.",
-    banner: "No prediction system -> Delay occurred",
-    bannerClassName:
-      "border-rose-400/20 bg-[linear-gradient(135deg,rgba(127,29,29,0.68),rgba(69,10,10,0.86))] text-rose-50 shadow-[0_18px_60px_rgba(127,29,29,0.24)]",
-  },
-  solution: {
-    label: "With AI",
-    badge: "Predictive mode",
-    title: "AI catches the hazard and shifts the route early.",
-    description:
-      "The system spots danger before entry, warns the operator, and bends the truck onto a safer corridor so movement stays smooth.",
-    banner: "AI prediction avoided delay",
-    bannerClassName:
-      "border-emerald-400/20 bg-[linear-gradient(135deg,rgba(6,78,59,0.72),rgba(3,24,24,0.9))] text-emerald-50 shadow-[0_18px_60px_rgba(16,185,129,0.18)]",
-  },
+type RoutePreviewProps = {
+  source: SavedPlace;
+  destination: SavedPlace;
 };
 
-export function RoutePreview() {
-  const [mode, setMode] = useState<HomepageMode>("problem");
-  const [simulationState, setSimulationState] = useState({
+type LiveRouteState = {
+  detected: boolean;
+  rerouting: boolean;
+  rerouted: boolean;
+  completed: boolean;
+  status: string;
+  trafficDelay: number;
+  remainingDistance: number;
+  currentLocation: string;
+  totalDistance: number;
+  etaSeconds: number;
+  weatherCondition: string | null;
+  weatherRiskLevel: "low" | "medium" | "high" | null;
+};
+
+function formatEta(seconds: number) {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+
+  if (!hours) {
+    return `${minutes} min`;
+  }
+
+  return `${hours}h ${remainder}m`;
+}
+
+const flowSteps = [
+  "Route selected",
+  "Route fetched",
+  "Truck moving",
+  "Tracking active",
+  "AI risk scan",
+  "Disruption detected",
+  "Dynamic reroute",
+  "Delivery complete",
+];
+
+export function RoutePreview({ source, destination }: RoutePreviewProps) {
+  const { pushToast } = useToast();
+  const [routeState, setRouteState] = useState<LiveRouteState>({
     detected: false,
-    paused: false,
     rerouting: false,
     rerouted: false,
-    alert: "Truck en route...",
+    completed: false,
+    status: "Waiting for route",
+    trafficDelay: 0,
+    remainingDistance: 0,
+    currentLocation: `${source.lat.toFixed(4)}, ${source.lng.toFixed(4)}`,
+    totalDistance: 0,
+    etaSeconds: 0,
+    weatherCondition: null,
+    weatherRiskLevel: null,
+  });
+  const [aiState, setAiState] = useState<{
+    riskLevel: "LOW" | "HIGH" | null;
+    decision: "reroute" | "continue" | null;
+    explanation: string | null;
+    loading: boolean;
+  }>({
+    riskLevel: null,
+    decision: null,
+    explanation: null,
+    loading: false,
   });
 
-  const content = modeContent[mode];
+  const detectionToastShownRef = useRef(false);
+  const rerouteToastShownRef = useRef(false);
+  const completionToastShownRef = useRef(false);
 
-  const liveStatus = useMemo(() => {
-    if (mode === "problem") {
-      if (simulationState.paused) {
-        return "Unexpected delay detected!";
+  useEffect(() => {
+    detectionToastShownRef.current = false;
+    rerouteToastShownRef.current = false;
+    completionToastShownRef.current = false;
+    setAiState({
+      riskLevel: null,
+      decision: null,
+      explanation: null,
+      loading: false,
+    });
+  }, [destination.name, source.name]);
+
+  useEffect(() => {
+    if (!routeState.detected || !routeState.weatherCondition || routeState.completed) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadGeminiDecision() {
+      setAiState((current) => ({ ...current, loading: true }));
+
+      try {
+        const response = await fetch("/api/gemini", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            trafficDelay: routeState.trafficDelay,
+            weatherCondition: routeState.weatherCondition,
+            remainingDistance: routeState.remainingDistance,
+          }),
+        });
+        const data = await response.json();
+
+        if (cancelled) {
+          return;
+        }
+
+        setAiState({
+          riskLevel: data.riskLevel ?? null,
+          decision: data.decision ?? null,
+          explanation:
+            data.explanation ??
+            "RouteGuard AI is analyzing the disruption and preparing guidance.",
+          loading: false,
+        });
+      } catch {
+        if (cancelled) {
+          return;
+        }
+
+        setAiState({
+          riskLevel: null,
+          decision: null,
+          explanation: "AI guidance is temporarily unavailable.",
+          loading: false,
+        });
       }
-
-      if (simulationState.detected) {
-        return "Delay triggered after entering the risk zone.";
-      }
-
-      return "Monitoring route without predictive protection.";
     }
 
-    if (simulationState.rerouted) {
-      return "Alternate corridor engaged successfully.";
+    void loadGeminiDecision();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    routeState.completed,
+    routeState.detected,
+    routeState.remainingDistance,
+    routeState.trafficDelay,
+    routeState.weatherCondition,
+  ]);
+
+  useEffect(() => {
+    if (!routeState.detected || detectionToastShownRef.current) {
+      return;
     }
 
-    if (simulationState.rerouting || simulationState.detected) {
-      return "High risk ahead - rerouting...";
+    detectionToastShownRef.current = true;
+    pushToast({
+      title: "High traffic ahead",
+      message:
+        aiState.explanation ??
+        "RouteGuard detected a traffic or weather disruption on the current journey.",
+      tone: "warning",
+    });
+  }, [aiState.explanation, pushToast, routeState.detected]);
+
+  useEffect(() => {
+    if (
+      aiState.decision !== "reroute" ||
+      !routeState.rerouted ||
+      rerouteToastShownRef.current
+    ) {
+      return;
     }
 
-    return "Watching the corridor with predictive AI.";
-  }, [mode, simulationState]);
+    rerouteToastShownRef.current = true;
+    pushToast({
+      title: "AI rerouted your path",
+      message: aiState.explanation ?? "A faster alternate route has been engaged.",
+      tone: "success",
+    });
+  }, [aiState.decision, aiState.explanation, pushToast, routeState.rerouted]);
+
+  useEffect(() => {
+    if (!routeState.completed || completionToastShownRef.current) {
+      return;
+    }
+
+    completionToastShownRef.current = true;
+    pushToast({
+      title: "Delivery complete",
+      message: "The truck reached the destination and the monitored journey is complete.",
+      tone: "success",
+    });
+  }, [pushToast, routeState.completed]);
+
+  const flowIndex = useMemo(() => {
+    if (routeState.completed) {
+      return 7;
+    }
+
+    if (routeState.rerouted) {
+      return 6;
+    }
+
+    if (routeState.detected) {
+      return 5;
+    }
+
+    if (routeState.weatherCondition) {
+      return 4;
+    }
+
+    if (routeState.currentLocation) {
+      return 3;
+    }
+
+    if (routeState.totalDistance > 0) {
+      return 2;
+    }
+
+    return 1;
+  }, [
+    routeState.completed,
+    routeState.currentLocation,
+    routeState.detected,
+    routeState.rerouted,
+    routeState.totalDistance,
+    routeState.weatherCondition,
+  ]);
+
+  const summaryCards = [
+    { label: "Distance", value: routeState.totalDistance ? `${routeState.totalDistance.toFixed(1)} km` : "-" },
+    { label: "ETA", value: routeState.etaSeconds ? formatEta(routeState.etaSeconds) : "-" },
+    { label: "Traffic delay", value: `${routeState.trafficDelay} min` },
+    { label: "Remaining", value: `${routeState.remainingDistance.toFixed(1)} km` },
+    { label: "Weather", value: routeState.weatherCondition ? routeState.weatherCondition : "-" },
+    { label: "Current location", value: routeState.currentLocation },
+  ];
 
   return (
     <section id="simulate" className="glass-panel rounded-[2rem] p-5 sm:p-6">
       <div className="flex flex-col gap-5 border-b border-white/10 pb-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.32em] text-white/45">
-              Live Route View
+              Live Route Dashboard
             </p>
-            <h2 className="mt-3 text-2xl font-semibold text-white">
-              Chennai to Bangalore risk corridor
+            <h2 className="mt-3 max-w-3xl text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">
+              One journey. Live tracking, disruption detection, AI rerouting, and delivery completion.
             </h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-white/64">
-              Toggle between a failure path and an AI-assisted reroute to compare
-              the same truck journey under two very different decision systems.
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-white/64">
+              Select a route, let the truck start moving, stream live traffic and weather updates
+              every 15 seconds, and let RouteGuard AI decide whether the shipment should continue
+              or be rerouted.
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:min-w-[15rem]">
-            <div className="glass-card rounded-2xl px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.26em] text-white/40">
-                Origin
-              </p>
-              <p className="mt-2 text-sm text-white">Chennai</p>
-            </div>
-            <div className="glass-card rounded-2xl px-4 py-3">
-              <p className="text-[11px] uppercase tracking-[0.26em] text-white/40">
-                Destination
-              </p>
-              <p className="mt-2 text-sm text-white">Bangalore</p>
-            </div>
+          <div className="glass-card rounded-[1.6rem] px-5 py-4">
+            <p className="text-[11px] uppercase tracking-[0.26em] text-white/42">Route</p>
+            <p className="mt-2 text-sm font-medium text-white">{source.name}</p>
+            <p className="text-sm text-white/52">to {destination.name}</p>
           </div>
         </div>
 
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="glass-card relative inline-flex rounded-full p-1">
-            <motion.div
-              layout
-              transition={{ type: "spring", stiffness: 320, damping: 28 }}
-              className={`absolute inset-y-1 w-[calc(50%-0.125rem)] rounded-full ${
-                mode === "problem"
-                  ? "left-1 bg-rose-500/18 shadow-[0_0_24px_rgba(251,113,133,0.24)]"
-                  : "left-[calc(50%+0.125rem)] bg-emerald-500/18 shadow-[0_0_24px_rgba(16,185,129,0.2)]"
-              }`}
-            />
-            <button
-              type="button"
-              onClick={() => setMode("problem")}
-              className={`relative z-10 rounded-full px-4 py-2 text-sm font-medium transition ${
-                mode === "problem" ? "text-white" : "text-white/55 hover:text-white/75"
-              }`}
-            >
-              Without AI
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("solution")}
-              className={`relative z-10 rounded-full px-4 py-2 text-sm font-medium transition ${
-                mode === "solution" ? "text-white" : "text-white/55 hover:text-white/75"
-              }`}
-            >
-              With AI
-            </button>
-          </div>
-
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={mode}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className={`alert-surface rounded-2xl border px-4 py-3 ${content.bannerClassName}`}
-            >
-              <p className="text-[11px] uppercase tracking-[0.26em] opacity-70">
-                {content.badge}
-              </p>
-              <p className="mt-2 text-sm font-medium">{content.banner}</p>
-            </motion.div>
-          </AnimatePresence>
+        <div className="grid gap-3 lg:grid-cols-4 xl:grid-cols-8">
+          {flowSteps.map((step, index) => {
+            const active = index <= flowIndex;
+            return (
+              <div
+                key={step}
+                className={`rounded-[1.35rem] border px-4 py-3 text-sm transition ${
+                  active
+                    ? "border-cyan-300/22 bg-cyan-500/10 text-white"
+                    : "border-white/8 bg-white/[0.025] text-white/42"
+                }`}
+              >
+                <p className="text-[10px] uppercase tracking-[0.24em]">{index + 1}</p>
+                <p className="mt-2 leading-6">{step}</p>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-        <motion.div
-          key={mode}
-          initial={{ opacity: 0, scale: 0.985, y: 8 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        >
+      <div className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
+        <div className="space-y-5">
           <RouteMap
-            simulationMode={mode}
-            heightClassName="h-[30rem]"
-            onSimulationStateChange={setSimulationState}
+            source={source}
+            destination={destination}
+            aiDecision={aiState.decision}
+            heightClassName="h-[38rem]"
+            onRouteStateChange={setRouteState}
           />
-        </motion.div>
 
-        <AnimatePresence mode="wait">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {summaryCards.map((card) => (
+              <div key={card.label} className="glass-card rounded-[1.4rem] px-4 py-4">
+                <p className="text-[11px] uppercase tracking-[0.24em] text-white/42">
+                  {card.label}
+                </p>
+                <p className="mt-3 text-base font-medium text-white">{card.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-4">
           <motion.div
-            key={`${mode}-panel`}
-            initial={{ opacity: 0, x: 16 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -16 }}
-            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-            className="glass-panel rounded-[2rem] p-6"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`alert-surface rounded-[2rem] border p-5 ${
+              routeState.completed
+                ? "border-emerald-400/18 bg-[linear-gradient(135deg,rgba(6,78,59,0.62),rgba(3,24,24,0.9))]"
+                : routeState.rerouted
+                  ? "border-emerald-400/18 bg-[linear-gradient(135deg,rgba(6,78,59,0.42),rgba(3,24,24,0.85))]"
+                  : routeState.detected
+                    ? "border-rose-400/18 bg-[linear-gradient(135deg,rgba(127,29,29,0.5),rgba(41,11,11,0.88))]"
+                    : "border-white/10 bg-white/[0.04]"
+            }`}
           >
-            <p className="text-xs uppercase tracking-[0.32em] text-white/45">
-              {content.label}
+            <p className="text-[11px] uppercase tracking-[0.28em] text-white/46">System state</p>
+            <h3 className="mt-3 text-2xl font-semibold text-white">{routeState.status}</h3>
+            <p className="mt-3 text-sm leading-7 text-white/68">
+              {routeState.completed
+                ? "The delivery reached its destination successfully."
+                : routeState.rerouted
+                  ? "The original route has been replaced and the truck is continuing on the optimized corridor."
+                  : routeState.detected
+                    ? "A disruption has been detected. RouteGuard AI is evaluating the best action for the shipment."
+                    : "The route is live, the truck is moving, and monitoring is active."}
             </p>
-            <h3 className="mt-4 text-2xl font-semibold text-white">
-              {content.title}
-            </h3>
-            <p className="mt-4 text-sm leading-7 text-white/64">
-              {content.description}
-            </p>
+          </motion.div>
 
-            <div className="mt-6 space-y-3">
-              <div
-                className={`alert-surface rounded-2xl border px-4 py-4 ${
-                  mode === "problem"
-                    ? "border-rose-400/15 bg-rose-500/10"
-                    : "border-emerald-400/15 bg-emerald-500/10"
-                }`}
-              >
-                <p className="text-[11px] uppercase tracking-[0.26em] text-white/48">
-                  Live alert
-                </p>
-                <p className="mt-2 text-sm font-medium text-white">
-                  {simulationState.alert}
+          <AiAssistantPanel
+            title="Gemini Guidance"
+            riskLevel={aiState.riskLevel}
+            decision={aiState.decision}
+            message={aiState.explanation}
+            loading={aiState.loading}
+            accent={routeState.rerouted || routeState.completed ? "emerald" : routeState.detected ? "rose" : "cyan"}
+          />
+
+          <div className="glass-panel rounded-[2rem] p-5">
+            <p className="text-[11px] uppercase tracking-[0.28em] text-white/42">Operational notes</p>
+            <div className="mt-4 space-y-3">
+              <div className="glass-card rounded-[1.3rem] px-4 py-4">
+                <p className="text-sm font-medium text-white">Tracking cadence</p>
+                <p className="mt-2 text-sm leading-7 text-white/62">
+                  Traffic and weather are refreshed every 15 seconds through backend APIs with caching and throttling.
                 </p>
               </div>
-
-              <div className="glass-card rounded-2xl px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.26em] text-white/40">
-                  What is happening
-                </p>
-                <p className="mt-2 text-sm leading-7 text-white/68">
-                  {liveStatus}
+              <div className="glass-card rounded-[1.3rem] px-4 py-4">
+                <p className="text-sm font-medium text-white">Disruption logic</p>
+                <p className="mt-2 text-sm leading-7 text-white/62">
+                  A sudden traffic delay jump or weather turning to rain or storm triggers AI review.
                 </p>
               </div>
-
-              <div className="glass-card rounded-2xl px-4 py-4">
-                <p className="text-[11px] uppercase tracking-[0.26em] text-white/40">
-                  Outcome
-                </p>
-                <p className="mt-2 text-sm leading-7 text-white/68">
-                  {mode === "problem"
-                    ? "The truck loses time because the risk is discovered only after impact."
-                    : "The route adapts before impact, keeping the journey moving and the ETA more stable."}
+              <div className="glass-card rounded-[1.3rem] px-4 py-4">
+                <p className="text-sm font-medium text-white">Reroute behavior</p>
+                <p className="mt-2 text-sm leading-7 text-white/62">
+                  If Gemini decides to reroute, the current path stays visible in red while the new path turns green and the truck continues without resetting.
                 </p>
               </div>
             </div>
-          </motion.div>
-        </AnimatePresence>
+          </div>
+        </div>
       </div>
     </section>
   );

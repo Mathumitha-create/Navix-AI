@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 
-import { getGeminiDecision } from "@/lib/server/gemini-api";
+import { evaluateRouteRisk } from "@/lib/server/decision-engine";
 import { ApiError } from "@/lib/server/http";
-import { parseGeminiPayload } from "@/lib/server/validation";
+import { parseDecisionPayload } from "@/lib/server/validation";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const payload = parseGeminiPayload(await request.json());
-    const decision = await getGeminiDecision(payload);
+    const payload = parseDecisionPayload(await request.json());
+    const decision = evaluateRouteRisk(payload);
 
     return NextResponse.json(decision);
   } catch (error) {
@@ -18,12 +18,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected server error while fetching Gemini reasoning.",
-      },
+      { error: "Unexpected server error while evaluating route risk." },
       { status: 500 }
     );
   }

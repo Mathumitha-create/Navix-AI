@@ -18,7 +18,12 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { error: "Unexpected server error while fetching weather data." },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unexpected server error while fetching weather data.",
+      },
       { status: 500 }
     );
   }

@@ -1,4 +1,4 @@
-import { getServerEnv } from "@/lib/server/env";
+import { getGoogleMapsApiKey } from "@/lib/server/env";
 import { ApiError, parseJson } from "@/lib/server/http";
 import type { CoordinateInput, LocationInput } from "@/lib/server/validation";
 
@@ -30,11 +30,37 @@ type RoutesApiResponse = {
 };
 
 type RouteResult = {
+  encodedPolyline: string;
   polyline: string;
   distance: number;
   duration: string;
   trafficDuration: string;
+  alternatives: Array<{
+    encodedPolyline: string;
+    polyline: string;
+    distance: number;
+    duration: string;
+    trafficDuration: string;
+  }>;
 };
+
+function mapRoute(route: NonNullable<RoutesApiResponse["routes"]>[number]) {
+  if (
+    !route?.polyline?.encodedPolyline ||
+    typeof route.distanceMeters !== "number" ||
+    !route.duration
+  ) {
+    throw new ApiError("Routes API response was missing required route fields.", 502);
+  }
+
+  return {
+    encodedPolyline: route.polyline.encodedPolyline,
+    polyline: route.polyline.encodedPolyline,
+    distance: route.distanceMeters,
+    duration: route.staticDuration || route.duration,
+    trafficDuration: route.duration,
+  };
+}
 
 function toWaypoint(input: LocationInput): WaypointRequest {
   if (typeof input === "string") {
@@ -56,8 +82,9 @@ function toWaypoint(input: LocationInput): WaypointRequest {
 export async function getRouteData(params: {
   source: LocationInput;
   destination: LocationInput;
+  alternatives?: boolean;
 }): Promise<RouteResult> {
-  const { googleMapsApiKey } = getServerEnv();
+  const googleMapsApiKey = getGoogleMapsApiKey();
 
   const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
     method: "POST",
@@ -72,7 +99,7 @@ export async function getRouteData(params: {
       destination: toWaypoint(params.destination),
       travelMode: "DRIVE",
       routingPreference: "TRAFFIC_AWARE_OPTIMAL",
-      computeAlternativeRoutes: false,
+      computeAlternativeRoutes: params.alternatives ?? false,
       units: "METRIC",
       polylineQuality: "OVERVIEW",
     }),
@@ -88,20 +115,12 @@ export async function getRouteData(params: {
     );
   }
 
-  const route = data.routes?.[0];
-
-  if (
-    !route?.polyline?.encodedPolyline ||
-    typeof route.distanceMeters !== "number" ||
-    !route.duration
-  ) {
-    throw new ApiError("Routes API response was missing required route fields.", 502);
+  if (!data.routes?.length) {
+    throw new ApiError("Routes API response did not include any routes.", 502);
   }
 
   return {
-    polyline: route.polyline.encodedPolyline,
-    distance: route.distanceMeters,
-    duration: route.staticDuration || route.duration,
-    trafficDuration: route.duration,
+    ...mapRoute(data.routes[0]),
+    alternatives: data.routes.slice(1).map(mapRoute),
   };
 }

@@ -1,10 +1,16 @@
-export const chennai = {
+export type SavedPlace = {
+  name: string;
+  lat: number;
+  lng: number;
+};
+
+export const chennai: SavedPlace = {
   name: "Chennai",
   lat: 13.0827,
   lng: 80.2707,
 };
 
-export const bangalore = {
+export const bangalore: SavedPlace = {
   name: "Bangalore",
   lat: 12.9716,
   lng: 77.5946,

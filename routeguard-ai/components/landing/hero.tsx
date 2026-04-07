@@ -1,10 +1,13 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useState } from "react";
 
-import { FeaturePanel } from "@/components/landing/feature-panel";
 import { RoutePreview } from "@/components/landing/route-preview";
-import { Button } from "@/components/ui/button";
+import {
+  getDefaultRouteSelection,
+  RouteSelector,
+} from "@/components/landing/route-selector";
 
 const container = {
   hidden: { opacity: 0 },
@@ -30,6 +33,8 @@ const item = {
 };
 
 export function Hero() {
+  const [selectedRoute, setSelectedRoute] = useState(getDefaultRouteSelection);
+
   return (
     <main className="relative isolate overflow-hidden">
       <div
@@ -71,35 +76,24 @@ export function Hero() {
             variants={item}
             className="mt-6 max-w-2xl text-lg leading-8 text-white/64 sm:text-xl"
           >
-            Predicting disruptions before they happen
+            Select a route once and watch the full journey unfold here: route fetch,
+            truck movement, live tracking, disruption detection, AI rerouting, and
+            delivery completion.
           </motion.p>
 
-          <motion.div
-            variants={item}
-            className="mt-10 flex flex-col gap-4 sm:flex-row"
-          >
-            <motion.div whileHover={{ y: -3 }} whileTap={{ scale: 0.98 }}>
-              <Button href="/problem-simulation">Simulate Problem</Button>
-            </motion.div>
-            <motion.div whileHover={{ y: -3 }} whileTap={{ scale: 0.98 }}>
-              <Button href="/solution-simulation" variant="secondary">
-                View Solution
-              </Button>
-            </motion.div>
+          <motion.div variants={item}>
+            <RouteSelector
+              source={selectedRoute.source}
+              destination={selectedRoute.destination}
+              onPredictRoute={setSelectedRoute}
+            />
           </motion.div>
 
           <motion.div
             variants={item}
-            className="mt-16 grid gap-6 lg:grid-cols-[1.18fr_0.82fr]"
+            className="mt-14"
           >
-            <RoutePreview />
-            <FeaturePanel
-              id="solution"
-              eyebrow="Solution Snapshot"
-              title="Surface the best route response with calm, high-signal UI."
-              description="The supporting panel stays intentionally minimal, giving the map room to lead while leaving a clear home for rerouting insights, ETA confidence, and mitigation recommendations."
-              accent="rgba(166, 127, 255, 0.58)"
-            />
+            <RoutePreview source={selectedRoute.source} destination={selectedRoute.destination} />
           </motion.div>
         </motion.div>
       </section>

@@ -10,6 +10,7 @@ export type LocationInput = string | CoordinateInput;
 type RoutePayload = {
   source: LocationInput;
   destination: LocationInput;
+  alternatives: boolean;
 };
 
 type WeatherPayload = {
@@ -20,7 +21,17 @@ type WeatherPayload = {
 type GeminiPayload = {
   trafficDelay: number;
   weatherCondition: string;
-  routeRisk: string;
+  remainingDistance: number;
+};
+
+type DecisionPayload = {
+  trafficDelay: number;
+  weatherCondition: string;
+};
+
+type TrackingPayload = {
+  currentLocation: CoordinateInput;
+  destination: CoordinateInput;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -66,6 +77,7 @@ export function parseRoutePayload(input: unknown): RoutePayload {
   return {
     source: parseLocationInput(input.source, "source"),
     destination: parseLocationInput(input.destination, "destination"),
+    alternatives: Boolean(input.alternatives),
   };
 }
 
@@ -89,13 +101,42 @@ export function parseGeminiPayload(input: unknown): GeminiPayload {
     throw new ApiError("weatherCondition must be a non-empty string.");
   }
 
-  if (typeof input.routeRisk !== "string" || !input.routeRisk.trim()) {
-    throw new ApiError("routeRisk must be a non-empty string.");
+  return {
+    trafficDelay: parseNumber(input.trafficDelay, "trafficDelay"),
+    weatherCondition: input.weatherCondition.trim(),
+    remainingDistance: parseNumber(input.remainingDistance, "remainingDistance"),
+  };
+}
+
+export function parseDecisionPayload(input: unknown): DecisionPayload {
+  if (!isObject(input)) {
+    throw new ApiError("Decision payload must be a JSON object.");
+  }
+
+  if (typeof input.weatherCondition !== "string" || !input.weatherCondition.trim()) {
+    throw new ApiError("weatherCondition must be a non-empty string.");
   }
 
   return {
     trafficDelay: parseNumber(input.trafficDelay, "trafficDelay"),
     weatherCondition: input.weatherCondition.trim(),
-    routeRisk: input.routeRisk.trim(),
+  };
+}
+
+export function parseTrackingPayload(input: unknown): TrackingPayload {
+  if (!isObject(input)) {
+    throw new ApiError("Tracking payload must be a JSON object.");
+  }
+
+  const currentLocation = parseLocationInput(input.currentLocation, "currentLocation");
+  const destination = parseLocationInput(input.destination, "destination");
+
+  if (typeof currentLocation === "string" || typeof destination === "string") {
+    throw new ApiError("currentLocation and destination must be lat/lng objects.");
+  }
+
+  return {
+    currentLocation,
+    destination,
   };
 }

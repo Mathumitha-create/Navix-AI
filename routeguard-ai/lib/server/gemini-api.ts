@@ -1,10 +1,10 @@
-import { getServerEnv } from "@/lib/server/env";
+import { getGeminiApiKey } from "@/lib/server/env";
 import { ApiError, parseJson } from "@/lib/server/http";
 
 type GeminiRequest = {
   trafficDelay: number;
   weatherCondition: string;
-  routeRisk: string;
+  remainingDistance: number;
 };
 
 type GeminiApiResponse = {
@@ -21,8 +21,9 @@ type GeminiApiResponse = {
 };
 
 type GeminiResult = {
-  reasoning: string;
-  decision: "reroute" | "stay";
+  riskLevel: "LOW" | "HIGH";
+  explanation: string;
+  decision: "reroute" | "continue";
 };
 
 function extractText(data: GeminiApiResponse) {
@@ -39,11 +40,13 @@ function parseGeminiOutput(text: string): GeminiResult {
     const parsed = JSON.parse(text) as Partial<GeminiResult>;
 
     if (
-      typeof parsed.reasoning === "string" &&
-      (parsed.decision === "reroute" || parsed.decision === "stay")
+      typeof parsed.explanation === "string" &&
+      (parsed.decision === "reroute" || parsed.decision === "continue") &&
+      (parsed.riskLevel === "LOW" || parsed.riskLevel === "HIGH")
     ) {
       return {
-        reasoning: parsed.reasoning,
+        riskLevel: parsed.riskLevel,
+        explanation: parsed.explanation.trim(),
         decision: parsed.decision,
       };
     }
@@ -52,25 +55,34 @@ function parseGeminiOutput(text: string): GeminiResult {
   }
 
   return {
-    reasoning: text || "No reasoning returned by Gemini.",
-    decision: /reroute/i.test(text) ? "reroute" : "stay",
+    riskLevel: /high/i.test(text) ? "HIGH" : "LOW",
+    explanation: text || "No explanation returned by Gemini.",
+    decision: /reroute/i.test(text) ? "reroute" : "continue",
   };
 }
 
 export async function getGeminiDecision(
   payload: GeminiRequest
 ): Promise<GeminiResult> {
-  const { geminiApiKey } = getServerEnv();
+  const geminiApiKey = getGeminiApiKey();
 
   const prompt = [
-    "You are a logistics decision assistant.",
-    "Given the structured route conditions, decide whether the truck should reroute.",
-    "Return JSON only with keys: reasoning and decision.",
-    'The decision must be either "reroute" or "stay".',
+    "You are an intelligent logistics assistant.",
+    "Analyze the following:",
+    `Traffic delay: ${payload.trafficDelay} minutes`,
+    `Weather: ${payload.weatherCondition}`,
+    `Remaining distance: ${payload.remainingDistance} km`,
     "",
-    `trafficDelayMinutes: ${payload.trafficDelay}`,
-    `weatherCondition: ${payload.weatherCondition}`,
-    `routeRisk: ${payload.routeRisk}`,
+    "Will this shipment be delayed?",
+    "Respond with:",
+    "1. Risk level (LOW or HIGH)",
+    "2. Decision (continue or reroute)",
+    "3. Short explanation",
+    "Keep the explanation concise and user-friendly.",
+    'Return JSON only with keys: riskLevel, decision, explanation.',
+    'The riskLevel must be either "LOW" or "HIGH".',
+    'The decision must be either "reroute" or "continue".',
+    "",
   ].join("\n");
 
   const response = await fetch(
