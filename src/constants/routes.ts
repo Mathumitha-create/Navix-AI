@@ -1,29 +1,29 @@
 import { Coordinate } from '../types';
 
-// Sample route from San Francisco to San Jose
+// Route from Chennai to Kanchipuram
 export const ORIGINAL_ROUTE: Coordinate[] = [
-  { lat: 37.7749, lng: -122.4194 },
-  { lat: 37.75, lng: -122.4 },
-  { lat: 37.7, lng: -122.35 },
-  { lat: 37.65, lng: -122.3 },
-  { lat: 37.6, lng: -122.25 },
-  { lat: 37.55, lng: -122.2 },
-  { lat: 37.5, lng: -122.15 },
-  { lat: 37.45, lng: -122.1 },
-  { lat: 37.4, lng: -122.05 },
-  { lat: 37.3382, lng: -121.8863 }
+  { lat: 13.0827, lng: 80.2707 },
+  { lat: 13.0551, lng: 80.2077 },
+  { lat: 13.0275, lng: 80.1447 },
+  { lat: 12.9999, lng: 80.0817 },
+  { lat: 12.9723, lng: 80.0187 },
+  { lat: 12.9447, lng: 79.9557 },
+  { lat: 12.9171, lng: 79.8927 },
+  { lat: 12.8895, lng: 79.8297 },
+  { lat: 12.8619, lng: 79.7667 },
+  { lat: 12.8342, lng: 79.7036 }
 ];
 
-// Alternate route (more inland)
+// Alternate route (slight detour)
 export const ALTERNATE_ROUTE: Coordinate[] = [
-  { lat: 37.7749, lng: -122.4194 },
-  { lat: 37.78, lng: -122.3 },
-  { lat: 37.75, lng: -122.2 },
-  { lat: 37.7, lng: -122.15 },
-  { lat: 37.65, lng: -122.1 },
-  { lat: 37.6, lng: -122.05 },
-  { lat: 37.55, lng: -122.0 },
-  { lat: 37.5, lng: -121.95 },
-  { lat: 37.45, lng: -121.9 },
-  { lat: 37.3382, lng: -121.8863 }
+  { lat: 13.0827, lng: 80.2707 },
+  { lat: 13.0251, lng: 80.2077 },
+  { lat: 12.9875, lng: 80.1447 },
+  { lat: 12.9599, lng: 80.0817 },
+  { lat: 12.9323, lng: 80.0187 },
+  { lat: 12.9047, lng: 79.9557 },
+  { lat: 12.8771, lng: 79.8927 },
+  { lat: 12.8495, lng: 79.8297 },
+  { lat: 12.8319, lng: 79.7667 },
+  { lat: 12.8342, lng: 79.7036 }
 ];

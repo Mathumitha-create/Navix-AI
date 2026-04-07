@@ -35,8 +35,8 @@ const ADMIN_DEMO_DRIVER: DriverProfile = {
 
 const ADMIN_DEMO_ASSIGNMENT: Assignment = {
   shipment: "SHP-2026-041",
-  source: "San Francisco Hub",
-  destination: "San Jose DC",
+  source: "Chennai Hub",
+  destination: "Kanchipuram DC",
 };
 
 const App: React.FC = () => {
