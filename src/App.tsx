@@ -4,13 +4,18 @@ import {
   Assignment,
   DriverProfile,
   AdminProfile,
+  PreJourneyPrediction,
+  FleetTruck,
+  FleetAlert,
+  AIDecisionLog,
 } from "./types";
 import { ORIGINAL_ROUTE, ALTERNATE_ROUTE } from "./constants/routes";
-import { predictDelay } from "./services/aiService";
+import { predictDelay, predictPreJourneyRisk } from "./services/aiService";
 import Map from "./components/Map";
 import Dashboard from "./components/Dashboard";
 import AlertPanel from "./components/AlertPanel";
 import AdminPanel from "./components/AdminPanel";
+import PreJourneyPanel from "./components/PreJourneyPanel";
 import {
   Play,
   RotateCcw,
@@ -27,16 +32,60 @@ import { cn } from "./lib/utils";
 
 const STEP_DISTANCE_KM = 4.2;
 const AVG_SPEED_KMPM = 0.8;
+const FLEET_SIZE = 12;
+const MAX_ALERTS = 12;
+const MAX_DECISIONS = 10;
 
-const ADMIN_DEMO_DRIVER: DriverProfile = {
-  id: "DRV001",
-  name: "Rahul Verma",
-};
+const FLEET_DRIVERS = [
+  "Rahul Verma",
+  "Ayesha Khan",
+  "Karan Mehta",
+  "Priya Nair",
+  "Arjun Patel",
+  "Sneha Iyer",
+  "Vikram Singh",
+  "Meera Das",
+  "Rohan Bedi",
+  "Nisha Rao",
+  "Kabir Shah",
+  "Divya Menon",
+];
+
+const formatTimestamp = () =>
+  new Date().toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+const createInitialFleet = (): FleetTruck[] =>
+  Array.from({ length: FLEET_SIZE }, (_, index) => {
+    const routeType = index % 4 === 0 ? "alternate" : "original";
+    const route = routeType === "alternate" ? ALTERNATE_ROUTE : ORIGINAL_ROUTE;
+    const currentStep = Math.min(index % 5, route.length - 2);
+    const traffic = 20 + ((index * 9) % 45);
+    const confidence = 28 + ((index * 7) % 30);
+
+    return {
+      truckId: `DRV${String(index + 1).padStart(3, "0")}`,
+      driverName: FLEET_DRIVERS[index],
+      shipment: `SHP-2026-${String(41 + index).padStart(3, "0")}`,
+      position: route[currentStep],
+      routeType,
+      currentStep,
+      traffic,
+      weather: index % 5 === 0 ? "rain" : "clear",
+      status: traffic > 60 ? "AT RISK" : "ON TIME",
+      etaMinutes: Math.max(8, (route.length - currentStep - 1) * 6),
+      confidence,
+      delaySavedMinutes: routeType === "alternate" ? 6 + (index % 4) * 2 : 0,
+    };
+  });
 
 const ADMIN_DEMO_ASSIGNMENT: Assignment = {
   shipment: "SHP-2026-041",
-  source: "Chennai Hub",
-  destination: "Kanchipuram DC",
+  source: "Chennai Hub, India",
+  destination: "Kanchipuram DC, India",
 };
 
 const App: React.FC = () => {
@@ -52,6 +101,10 @@ const App: React.FC = () => {
   const [isAdminAuthenticating, setIsAdminAuthenticating] = useState(false);
   const [adminError, setAdminError] = useState("");
   const [admin, setAdmin] = useState<AdminProfile | null>(null);
+  const [preJourneyPrediction, setPreJourneyPrediction] =
+    useState<PreJourneyPrediction | null>(null);
+  const [isPreJourneyLoading, setIsPreJourneyLoading] = useState(false);
+  const [preJourneyError, setPreJourneyError] = useState("");
   const [journeyStarted, setJourneyStarted] = useState(false);
   const [startTimestamp, setStartTimestamp] = useState<number | null>(null);
   const [completionSummary, setCompletionSummary] = useState<{
@@ -59,6 +112,29 @@ const App: React.FC = () => {
     routeTaken: string;
     delayAvoidedMinutes: number;
   } | null>(null);
+  const [fleetTrucks, setFleetTrucks] = useState<FleetTruck[]>(createInitialFleet);
+  const [fleetAlerts, setFleetAlerts] = useState<FleetAlert[]>([
+    {
+      id: "boot-alert",
+      truckId: "SYSTEM",
+      level: "info",
+      message:
+        "AI control tower is online. Telemetry sync established across the fleet.",
+      timestamp: formatTimestamp(),
+    },
+  ]);
+  const [aiDecisions, setAiDecisions] = useState<AIDecisionLog[]>([
+    {
+      id: "boot-decision",
+      truckId: "SYSTEM",
+      title: "Fleet optimizer initialized",
+      detail:
+        "Baseline ETAs computed for all active trucks and watchlist thresholds are armed.",
+      confidence: 93,
+      timestamp: formatTimestamp(),
+    },
+  ]);
+  const [selectedTruckId, setSelectedTruckId] = useState<string | null>("DRV001");
 
   const initialDistance = (ORIGINAL_ROUTE.length - 1) * STEP_DISTANCE_KM;
 
@@ -78,6 +154,23 @@ const App: React.FC = () => {
 
   const [isRunning, setIsRunning] = useState(false);
   const simulationInterval = useRef<NodeJS.Timeout | null>(null);
+  const adminInterval = useRef<NodeJS.Timeout | null>(null);
+
+  const loadPreJourneyPrediction = useCallback(async () => {
+    setIsPreJourneyLoading(true);
+    setPreJourneyError("");
+
+    try {
+      const forecast = await predictPreJourneyRisk({
+        departureHour: new Date().getHours(),
+      });
+      setPreJourneyPrediction(forecast);
+    } catch {
+      setPreJourneyError("Unable to generate pre-journey forecast right now.");
+    } finally {
+      setIsPreJourneyLoading(false);
+    }
+  }, []);
 
   const resetSimulation = useCallback(() => {
     setIsRunning(false);
@@ -99,7 +192,8 @@ const App: React.FC = () => {
     setJourneyStarted(false);
     setStartTimestamp(null);
     setCompletionSummary(null);
-  }, []);
+    void loadPreJourneyPrediction();
+  }, [loadPreJourneyPrediction]);
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -154,6 +248,28 @@ const App: React.FC = () => {
       }
 
       setAdmin(payload.admin);
+      setFleetTrucks(createInitialFleet());
+      setFleetAlerts([
+        {
+          id: `login-alert-${Date.now()}`,
+          truckId: "SYSTEM",
+          level: "info",
+          message: "Control tower opened. Streaming live logistics telemetry.",
+          timestamp: formatTimestamp(),
+        },
+      ]);
+      setAiDecisions([
+        {
+          id: `login-decision-${Date.now()}`,
+          truckId: "SYSTEM",
+          title: "Control tower activated",
+          detail:
+            "AI risk monitors are now evaluating route health, weather exposure, and ETA variance.",
+          confidence: 96,
+          timestamp: formatTimestamp(),
+        },
+      ]);
+      setSelectedTruckId("DRV001");
     } catch {
       setAdminError("Unable to reach server. Please try again.");
     } finally {
@@ -194,7 +310,6 @@ const App: React.FC = () => {
       let nextWeather = prev.weather;
       let nextAlerts = [...prev.alerts];
 
-      // Simulate disruption at step 3
       if (nextStep === 3 && !prev.isRerouted) {
         nextTraffic = 85;
         nextWeather = "rain";
@@ -228,7 +343,6 @@ const App: React.FC = () => {
     });
   }, []);
 
-  // AI Prediction Effect
   useEffect(() => {
     if (!isRunning || !journeyStarted) return;
 
@@ -249,7 +363,6 @@ const App: React.FC = () => {
 
         if (prediction.delay === 1 && !prev.isRerouted) {
           nextStatus = "DELAY RISK";
-          // Trigger rerouting if risk is high
           if (prediction.confidence > 0.6) {
             nextIsRerouted = true;
             nextStatus = "REROUTED";
@@ -280,21 +393,27 @@ const App: React.FC = () => {
       });
     };
 
-    checkAI();
+    void checkAI();
   }, [
     state.currentStep,
     state.traffic,
     state.weather,
     isRunning,
     journeyStarted,
+    state.isRerouted,
   ]);
 
   useEffect(() => {
-    if (state.status !== "DELIVERED" || !startTimestamp || completionSummary)
+    if (state.status !== "DELIVERED" || !startTimestamp || completionSummary) {
       return;
+    }
+
+    const routeLength = state.isRerouted ? ALTERNATE_ROUTE.length : ORIGINAL_ROUTE.length;
+    const simulatedTravelMinutes = Math.round((routeLength - 1) * (STEP_DISTANCE_KM / AVG_SPEED_KMPM));
+    const trafficPenaltyMinutes = state.isRerouted ? 4 : 12;
     const totalMinutes = Math.max(
-      1,
-      Math.round((Date.now() - startTimestamp) / 60000),
+      18,
+      simulatedTravelMinutes + trafficPenaltyMinutes,
     );
     setCompletionSummary({
       totalMinutes,
@@ -314,34 +433,172 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isRunning && journeyStarted) {
       simulationInterval.current = setInterval(runStep, 5000);
-    } else {
-      if (simulationInterval.current) clearInterval(simulationInterval.current);
+    } else if (simulationInterval.current) {
+      clearInterval(simulationInterval.current);
     }
+
     return () => {
       if (simulationInterval.current) clearInterval(simulationInterval.current);
     };
   }, [isRunning, runStep, journeyStarted]);
 
+  useEffect(() => {
+    if (!driver || !assignment || journeyStarted) return;
+    void loadPreJourneyPrediction();
+  }, [driver, assignment, journeyStarted, loadPreJourneyPrediction]);
+
+  useEffect(() => {
+    if (!admin) {
+      if (adminInterval.current) clearInterval(adminInterval.current);
+      return;
+    }
+
+    adminInterval.current = setInterval(() => {
+      setFleetTrucks((prev) => {
+        const nextTimestamp = formatTimestamp();
+        const nextAlerts: FleetAlert[] = [];
+        const nextDecisions: AIDecisionLog[] = [];
+
+        const nextFleet = prev.map((truck, index) => {
+          const currentRoute =
+            truck.routeType === "alternate" ? ALTERNATE_ROUTE : ORIGINAL_ROUTE;
+          const nextStep = Math.min(truck.currentStep + 1, currentRoute.length - 1);
+          const weather =
+            nextStep >= 3 && nextStep <= 5 && (index + Date.now()) % 3 === 0
+              ? "rain"
+              : truck.weather;
+          const trafficShift = ((index % 3) - 1) * 8 + 3;
+          const traffic = Math.max(12, Math.min(96, truck.traffic + trafficShift));
+          const confidence = Math.min(
+            97,
+            Math.max(
+              22,
+              Math.round(traffic * 0.72 + (weather === "rain" ? 12 : 0)),
+            ),
+          );
+          let status: FleetTruck["status"] = "ON TIME";
+          let routeType = truck.routeType;
+          let delaySavedMinutes = truck.delaySavedMinutes;
+
+          if (nextStep >= currentRoute.length - 1) {
+            status = "DELIVERED";
+          } else if (traffic >= 82) {
+            status = "DELAYED";
+          } else if (traffic >= 66 || weather === "rain") {
+            status = "AT RISK";
+          }
+
+          if (
+            status !== "DELIVERED" &&
+            routeType === "original" &&
+            traffic >= 74 &&
+            index % 2 === 0
+          ) {
+            routeType = "alternate";
+            status = "REROUTED";
+            delaySavedMinutes = 10 + (index % 4) * 3;
+            nextAlerts.push({
+              id: `${truck.truckId}-reroute-${Date.now()}-${index}`,
+              truckId: truck.truckId,
+              level: "warning",
+              message: `AI rerouted ${truck.truckId} to the bypass corridor to avoid severe congestion.`,
+              timestamp: nextTimestamp,
+            });
+            nextDecisions.push({
+              id: `${truck.truckId}-decision-${Date.now()}-${index}`,
+              truckId: truck.truckId,
+              title: `AI rerouted ${truck.truckId}`,
+              detail: `Traffic spike detected on the original corridor. Estimated ${delaySavedMinutes} minutes saved by switching routes.`,
+              confidence,
+              timestamp: nextTimestamp,
+            });
+          } else if (status === "DELAYED" && index % 3 === 0) {
+            nextAlerts.push({
+              id: `${truck.truckId}-delay-${Date.now()}-${index}`,
+              truckId: truck.truckId,
+              level: "critical",
+              message: `${truck.truckId} has entered a high-delay zone due to dense traffic and reduced speed.`,
+              timestamp: nextTimestamp,
+            });
+            nextDecisions.push({
+              id: `${truck.truckId}-delay-decision-${Date.now()}-${index}`,
+              truckId: truck.truckId,
+              title: `Delay predicted for ${truck.truckId}`,
+              detail: `AI confidence reached ${confidence}% after detecting sustained congestion and ETA drift.`,
+              confidence,
+              timestamp: nextTimestamp,
+            });
+          } else if (status === "AT RISK" && index % 4 === 1) {
+            nextAlerts.push({
+              id: `${truck.truckId}-weather-${Date.now()}-${index}`,
+              truckId: truck.truckId,
+              level: "warning",
+              message: `${truck.truckId} is approaching a weather risk pocket with reduced visibility.`,
+              timestamp: nextTimestamp,
+            });
+          }
+
+          const route = routeType === "alternate" ? ALTERNATE_ROUTE : ORIGINAL_ROUTE;
+          const boundedStep = Math.min(nextStep, route.length - 1);
+
+          return {
+            ...truck,
+            routeType,
+            currentStep: boundedStep,
+            position: route[boundedStep],
+            traffic,
+            weather,
+            confidence,
+            status,
+            etaMinutes:
+              status === "DELIVERED"
+                ? 0
+                : Math.max(6, (route.length - boundedStep - 1) * 6 + (traffic > 70 ? 8 : 0)),
+            delaySavedMinutes,
+          };
+        });
+
+        if (nextAlerts.length > 0) {
+          setFleetAlerts((prevAlerts) =>
+            [...nextAlerts, ...prevAlerts].slice(0, MAX_ALERTS),
+          );
+        }
+
+        if (nextDecisions.length > 0) {
+          setAiDecisions((prevDecisions) =>
+            [...nextDecisions, ...prevDecisions].slice(0, MAX_DECISIONS),
+          );
+        }
+
+        return nextFleet;
+      });
+    }, 3500);
+
+    return () => {
+      if (adminInterval.current) clearInterval(adminInterval.current);
+    };
+  }, [admin]);
+
   if (admin) {
     return (
-      <div className="min-h-screen bg-gray-50 text-gray-900 font-sans p-4 md:p-8">
-        <div className="max-w-7xl mx-auto">
+      <div className="min-h-screen bg-slate-900 text-slate-100 font-sans p-4 md:p-8">
+        <div className="max-w-[1600px] mx-auto">
           <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <div className="p-2 bg-blue-600 rounded-lg">
-                  <Truck className="w-6 h-6 text-white" />
+                <div className="p-2 bg-cyan-500 rounded-lg shadow-lg shadow-cyan-500/20">
+                  <Truck className="w-6 h-6 text-slate-950" />
                 </div>
                 <h1 className="text-2xl font-bold tracking-tight">
-                  SmartLogistics Admin
+                  SmartLogistics Control Tower
                 </h1>
               </div>
-              <p className="text-gray-500">
-                Fleet visibility and AI monitoring
+              <p className="text-slate-400">
+                Multi-truck AI supervision, alerts, and live routing decisions
               </p>
-              <div className="mt-2 text-xs text-gray-500">
+              <div className="mt-2 text-xs text-slate-500">
                 Logged in as{" "}
-                <span className="font-semibold text-gray-700">
+                <span className="font-semibold text-slate-300">
                   {admin.name}
                 </span>
               </div>
@@ -351,16 +608,18 @@ const App: React.FC = () => {
                 setAdmin(null);
                 setAuthView("driver");
               }}
-              className="px-5 py-2.5 rounded-xl font-bold bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 shadow-sm"
+              className="px-5 py-2.5 rounded-xl font-bold bg-slate-800 border border-slate-700 text-slate-100 hover:bg-slate-700 shadow-sm"
             >
               Logout
             </button>
           </header>
 
           <AdminPanel
-            state={state}
-            driver={ADMIN_DEMO_DRIVER}
-            assignment={ADMIN_DEMO_ASSIGNMENT}
+            trucks={fleetTrucks}
+            alerts={fleetAlerts}
+            decisions={aiDecisions}
+            selectedTruckId={selectedTruckId}
+            onSelectTruck={setSelectedTruckId}
           />
         </div>
       </div>
@@ -504,7 +763,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans p-4 md:p-8">
       <div className="max-w-7xl mx-auto">
-        {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -535,7 +793,7 @@ const App: React.FC = () => {
               </div>
               <div className="flex items-center gap-1.5">
                 <Route className="w-4 h-4" />
-                {assignment.source} → {assignment.destination}
+                {assignment.source} to {assignment.destination}
               </div>
             </div>
           </div>
@@ -582,55 +840,65 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Dashboard Stats */}
         <Dashboard state={state} />
 
         {!journeyStarted && (
-          <div className="mb-6 bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-            <h2 className="text-lg font-bold mb-2">Driver Dashboard</h2>
-            <p className="text-gray-600 mb-4">
-              Ready to dispatch. Click{" "}
-              <span className="font-semibold">Start Journey</span> to begin live
-              tracking and AI monitoring.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                <div className="text-gray-500">Driver</div>
-                <div className="font-semibold text-gray-900">{driver.name}</div>
-              </div>
-              <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                <div className="text-gray-500">Assigned Shipment</div>
-                <div className="font-semibold text-gray-900">
-                  {assignment.shipment}
+          <>
+            <div className="mb-6 bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-bold mb-2">Driver Dashboard</h2>
+              <p className="text-gray-600 mb-4">
+                Ready to dispatch. Review the AI forecast below, then click{" "}
+                <span className="font-semibold">Start Journey</span> to begin
+                live tracking and AI monitoring.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                  <div className="text-gray-500">Driver</div>
+                  <div className="font-semibold text-gray-900">
+                    {driver.name}
+                  </div>
                 </div>
-              </div>
-              <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                <div className="text-gray-500">Route</div>
-                <div className="font-semibold text-gray-900">
-                  {assignment.source} → {assignment.destination}
+                <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                  <div className="text-gray-500">Assigned Shipment</div>
+                  <div className="font-semibold text-gray-900">
+                    {assignment.shipment}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                  <div className="text-gray-500">Route</div>
+                  <div className="font-semibold text-gray-900">
+                    {assignment.source} to {assignment.destination}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+
+            <PreJourneyPanel
+              prediction={preJourneyPrediction}
+              loading={isPreJourneyLoading}
+              error={preJourneyError}
+              onRefresh={() => void loadPreJourneyPrediction()}
+            />
+          </>
         )}
 
-        {/* Main Content Area */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[600px]">
-          {/* Map View */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-2 h-full">
             <div className="flex items-center justify-between px-4 py-2 border-b border-gray-50 mb-2">
               <div className="flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-red-500" />
-                <span className="text-sm font-bold">Live Tracking</span>
+                <span className="text-sm font-bold">
+                  {journeyStarted ? "Live Tracking" : "Risk-Aware Route Preview"}
+                </span>
               </div>
               <div className="flex items-center gap-4 text-xs font-medium text-gray-400">
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-1 bg-red-500 rounded-full" />
-                  Original Route
+                  Risk Segment
                 </div>
                 <div className="flex items-center gap-1.5">
                   <div className="w-3 h-1 bg-green-500 rounded-full" />
-                  Alternate Route
+                  Recommended Route
                 </div>
               </div>
             </div>
@@ -638,37 +906,45 @@ const App: React.FC = () => {
               <Map
                 truckPosition={state.truckPosition}
                 isRerouted={state.isRerouted}
+                journeyStarted={journeyStarted}
+                riskZones={preJourneyPrediction?.riskZones}
+                recommendedRoute={preJourneyPrediction?.recommendedRoute}
               />
             </div>
           </div>
 
-          {/* Alert Panel */}
           <div className="h-full">
             <AlertPanel alerts={state.alerts} />
           </div>
         </div>
 
         {completionSummary && (
-          <div className="mt-6 bg-green-50 border border-green-100 rounded-2xl p-5">
-            <h3 className="font-bold text-green-700 mb-3">
-              Delivery Completed ✅
+          <div className="mt-6 max-w-4xl bg-green-50 border border-green-100 rounded-2xl p-5">
+            <h3 className="font-bold text-green-700 mb-4">
+              Delivery Completed
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-              <div>
-                <p className="text-green-600">Total Time</p>
-                <p className="font-semibold text-green-900">
+              <div className="rounded-xl bg-white/70 border border-green-100 p-4">
+                <p className="text-green-600 text-xs uppercase tracking-wide">
+                  Total Time
+                </p>
+                <p className="font-semibold text-green-900 text-xl mt-1">
                   {completionSummary.totalMinutes} min
                 </p>
               </div>
-              <div>
-                <p className="text-green-600">Delay Avoided</p>
-                <p className="font-semibold text-green-900">
+              <div className="rounded-xl bg-white/70 border border-green-100 p-4">
+                <p className="text-green-600 text-xs uppercase tracking-wide">
+                  Delay Avoided
+                </p>
+                <p className="font-semibold text-green-900 text-xl mt-1">
                   {completionSummary.delayAvoidedMinutes} min
                 </p>
               </div>
-              <div>
-                <p className="text-green-600">Route Taken</p>
-                <p className="font-semibold text-green-900">
+              <div className="rounded-xl bg-white/70 border border-green-100 p-4">
+                <p className="text-green-600 text-xs uppercase tracking-wide">
+                  Route Taken
+                </p>
+                <p className="font-semibold text-green-900 text-base mt-1">
                   {completionSummary.routeTaken}
                 </p>
               </div>
@@ -676,7 +952,6 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* Footer Info */}
         <footer className="mt-8 pt-8 border-t border-gray-200 flex flex-col md:flex-row justify-between items-center gap-4 text-sm text-gray-400">
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">

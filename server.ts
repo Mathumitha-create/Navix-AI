@@ -16,8 +16,8 @@ async function startServer() {
     password: "demo123",
     name: "Rahul Verma",
     shipment: "SHP-2026-041",
-    source: "San Francisco Hub",
-    destination: "San Jose DC",
+    source: "Chennai Hub, India",
+    destination: "Kanchipuram DC, India",
   };
 
   const DEMO_ADMIN = {

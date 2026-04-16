@@ -1,15 +1,42 @@
-import React, { useEffect, useState } from 'react';
-import { APIProvider, Map as GoogleMap, Marker, Polyline, useMap } from '@vis.gl/react-google-maps';
-import { Coordinate } from '../types';
-import { ORIGINAL_ROUTE, ALTERNATE_ROUTE } from '../constants/routes';
-import { Truck } from 'lucide-react';
+import React, { useEffect } from "react";
+import {
+  APIProvider,
+  Map as GoogleMap,
+  Marker,
+  Polyline,
+  useMap,
+} from "@vis.gl/react-google-maps";
+import { Coordinate, RiskZone } from "../types";
+import { ORIGINAL_ROUTE, ALTERNATE_ROUTE } from "../constants/routes";
+import { Truck } from "lucide-react";
 
 interface MapProps {
   truckPosition: Coordinate;
   isRerouted: boolean;
+  journeyStarted?: boolean;
+  riskZones?: RiskZone[];
+  recommendedRoute?: "original" | "alternate";
 }
 
-const MapContent: React.FC<MapProps> = ({ truckPosition, isRerouted }) => {
+const segmentPath = (
+  route: Coordinate[],
+  startIndex: number,
+  endIndex: number,
+) => route.slice(startIndex, Math.min(route.length, endIndex + 1));
+
+const zoneColor = (riskLevel: RiskZone["riskLevel"]) => {
+  if (riskLevel === "high") return "#ef4444";
+  if (riskLevel === "medium") return "#f59e0b";
+  return "#22c55e";
+};
+
+const MapContent: React.FC<MapProps> = ({
+  truckPosition,
+  isRerouted,
+  journeyStarted = false,
+  riskZones = [],
+  recommendedRoute = "original",
+}) => {
   const map = useMap();
 
   useEffect(() => {
@@ -18,30 +45,52 @@ const MapContent: React.FC<MapProps> = ({ truckPosition, isRerouted }) => {
     }
   }, [map, truckPosition]);
 
+  const originalOpacity =
+    !journeyStarted && recommendedRoute === "original" ? 0.98 : 0.9;
+  const alternateOpacity =
+    !journeyStarted && recommendedRoute === "alternate" ? 0.92 : 0.55;
+
   return (
     <>
-      {/* Original Route */}
       <Polyline
         path={ORIGINAL_ROUTE}
-        strokeColor="#ef4444" // red-500
-        strokeOpacity={isRerouted ? 0.3 : 0.8}
-        strokeWeight={4}
+        strokeColor="#ef4444"
+        strokeOpacity={isRerouted ? 0.3 : originalOpacity}
+        strokeWeight={
+          !journeyStarted ? 5 : 4
+        }
       />
-      
-      {/* Alternate Route */}
-      {isRerouted && (
+
+      {(isRerouted || !journeyStarted) && (
         <Polyline
           path={ALTERNATE_ROUTE}
-          strokeColor="#22c55e" // green-500
-          strokeOpacity={0.8}
-          strokeWeight={4}
+          strokeColor="#22c55e"
+          strokeOpacity={journeyStarted ? 0.8 : alternateOpacity}
+          strokeWeight={
+            !journeyStarted && recommendedRoute === "alternate" ? 5 : 4
+          }
         />
       )}
 
-      {/* Truck Marker */}
+      {!journeyStarted &&
+        riskZones.map((zone, index) => {
+          const route =
+            zone.route === "alternate" ? ALTERNATE_ROUTE : ORIGINAL_ROUTE;
+
+          return (
+            <Polyline
+              key={`${zone.route}-${zone.startIndex}-${zone.endIndex}-${index}`}
+              path={segmentPath(route, zone.startIndex, zone.endIndex)}
+              strokeColor={zoneColor(zone.riskLevel)}
+              strokeOpacity={0.95}
+              strokeWeight={7}
+            />
+          );
+        })}
+
       <Marker
         position={truckPosition}
-        title="Delivery Truck"
+        title={journeyStarted ? "Delivery Truck" : "Dispatch Point"}
       />
     </>
   );
@@ -56,7 +105,9 @@ const Map: React.FC<MapProps> = (props) => {
         <div>
           <Truck className="w-12 h-12 mx-auto mb-4 opacity-20" />
           <p className="text-lg font-medium">Google Maps API Key Required</p>
-          <p className="text-sm">Please add VITE_GOOGLE_MAPS_API_KEY to your .env file.</p>
+          <p className="text-sm">
+            Please add VITE_GOOGLE_MAPS_API_KEY to your .env file.
+          </p>
           <div className="mt-4 p-4 bg-white rounded-lg shadow-sm text-left max-w-md mx-auto">
             <p className="text-xs font-mono text-gray-400 mb-2">SIMULATED VIEW</p>
             <div className="space-y-2">
@@ -76,7 +127,7 @@ const Map: React.FC<MapProps> = (props) => {
         <GoogleMap
           defaultCenter={ORIGINAL_ROUTE[0]}
           defaultZoom={12}
-          mapId="bf51a910020fa857" // Optional: add a map ID for advanced features
+          mapId="bf51a910020fa857"
           disableDefaultUI={true}
         >
           <MapContent {...props} />
